@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import * as webpush from 'web-push';
 import { depotStore, GovernanceError } from './server/store.ts';
 import { depotStoreSupabase } from './server/supabaseStore.ts';
@@ -714,7 +713,8 @@ export async function startServer() {
 
   // Vite dev middleware or static production serving
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    const viteModule = await import('vite');
+    const vite = await viteModule.createServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
