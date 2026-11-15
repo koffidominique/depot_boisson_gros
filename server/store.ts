@@ -21,6 +21,7 @@ import type {
   PermissionKey,
   Product,
   PurchaseOrder,
+  PushSubscriptionRecord,
   ReconciliationPV,
   ReturnBreakageRecord,
   RoleCode,
@@ -67,7 +68,8 @@ class DepotStore {
           parsed.users.some((u) => !VALID_ROLES.includes(u.role as RoleCode));
         const missingDelegations = !Array.isArray(parsed.delegations);
         const missingThreshold = typeof parsed.company?.autoValidateSaleThreshold !== 'number';
-        if (!hasLegacyRoles && !missingDelegations && !missingThreshold) {
+        const missingPush = !Array.isArray(parsed.pushSubscriptions);
+        if (!hasLegacyRoles && !missingDelegations && !missingThreshold && !missingPush) {
           if (typeof parsed.company.dailySalesTarget !== 'number') {
             parsed.company.dailySalesTarget = 1500000;
           }
@@ -123,6 +125,7 @@ class DepotStore {
         auditLogs: this.db.auditLogs.filter(
           (l) => l.warehouseId === whId || l.userId === actor.id
         ),
+        pushSubscriptions: [],
       };
     }
 
@@ -167,6 +170,7 @@ class DepotStore {
       reconciliations: [],
       approvals: [],
       auditLogs: this.db.auditLogs.filter((l) => l.userId === actor.id),
+      pushSubscriptions: [],
     };
   }
 
@@ -2741,7 +2745,76 @@ class DepotStore {
     return req;
   }
 
-  // 14. Users & Settings
+  // 14. Push Notifications Subscriptions
+  public subscribePush(
+    actor: UserAccount,
+    input: { endpoint: string; p256dh: string; auth: string }
+  ): PushSubscriptionRecord {
+    const now = new Date().toISOString();
+    // Supprimer un ancien abonnement pour ce même utilisateur/endpoint s'il existe
+    this.db.pushSubscriptions = this.db.pushSubscriptions.filter(
+      (s) => s.userId === actor.id && s.endpoint !== input.endpoint
+    );
+
+    const sub: PushSubscriptionRecord = {
+      id: `ps-${Date.now()}`,
+      userId: actor.id,
+      endpoint: input.endpoint,
+      p256dh: input.p256dh,
+      auth: input.auth,
+      createdAt: now,
+      active: true,
+    };
+    this.db.pushSubscriptions.push(sub);
+    this.appendAudit(
+      actor,
+      'ABONNEMENT_PUSH',
+      'PushSubscription',
+      sub.id,
+      sub.endpoint,
+      null,
+      { userId: actor.id, active: true },
+      'Web / API',
+      false,
+      actor.warehouseId ?? null
+    );
+    this.save();
+    return sub;
+  }
+
+  public unsubscribePush(actor: UserAccount, subscriptionId: string): { ok: boolean } {
+    const idx = this.db.pushSubscriptions.findIndex((s) => s.id === subscriptionId);
+    if (idx === -1) throw new GovernanceError('Abonnement push introuvable.', 404);
+    const sub = this.db.pushSubscriptions[idx];
+    if (sub.userId !== actor.id && actor.role !== 'PROPRIETAIRE') {
+      throw new GovernanceError('Vous ne pouvez pas supprimer cet abonnement.', 403, 'RBAC_FORBIDDEN');
+    }
+    this.db.pushSubscriptions.splice(idx, 1);
+    this.appendAudit(
+      actor,
+      'DESABONNEMENT_PUSH',
+      'PushSubscription',
+      subscriptionId,
+      sub.endpoint,
+      { active: true },
+      { active: false },
+      'Web / API',
+      false,
+      actor.warehouseId ?? null
+    );
+    this.save();
+    return { ok: true };
+  }
+
+  public getPushSubscriptionsForUser(userId: string): PushSubscriptionRecord[] {
+    return this.db.pushSubscriptions.filter((s) => s.userId === userId && s.active);
+  }
+
+  public getAllPushSubscriptions(): PushSubscriptionRecord[] {
+    return this.db.pushSubscriptions.filter((s) => s.active);
+  }
+
+  // 15. Users & Settings
   public upsertUser(actor: UserAccount, input: Partial<UserAccount> & { id?: string }) {
     const now = new Date().toISOString();
     if (input.id) {

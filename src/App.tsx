@@ -39,6 +39,10 @@ import {
 import { AuthView } from './components/AuthView';
 import { GlobalSearchBar } from './components/GlobalSearchBar';
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { PWAUpdatePrompt } from './components/PWAUpdatePrompt';
+import { PWAStatusBanner } from './components/PWAStatusBanner';
+import { PushNotificationPrompt } from './components/PushNotificationPrompt';
+import { ShareButton } from './components/ShareButton';
 import { DashboardView } from './modules/DashboardView';
 import { PosSalesView } from './modules/PosSalesView';
 import { ConsignmentsView } from './modules/ConsignmentsView';
@@ -500,6 +504,16 @@ const ErpShell: React.FC = () => {
 
             <PWAInstallButton />
 
+            {/* Partage Web Share (ticket, BL, etc.) */}
+            <ShareButton
+              title="GestDepot — Dépôt de Boissons"
+              text="Découvrez GestDepot, l'ERP terrain pour la gestion de dépôts de boissons en Côte d'Ivoire."
+              label="Partager l'app"
+            />
+
+            {/* Abonnement notifications push */}
+            <PushNotificationPrompt />
+
             <button
               type="button"
               onClick={toggleDarkMode}
@@ -585,6 +599,10 @@ const ErpShell: React.FC = () => {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* PWA Status & Update prompts */}
+      <PWAStatusBanner />
+      <PWAUpdatePrompt />
 
       {/* Toast Stack */}
       <div className="no-print fixed bottom-4 right-4 z-50 flex max-w-sm flex-col gap-2">
