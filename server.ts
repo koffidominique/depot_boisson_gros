@@ -50,10 +50,10 @@ function handleApiError(res: express.Response, err: unknown) {
   return res.status(500).json({ error: message, code: 'INTERNAL_ERROR' });
 }
 
-async function startServer() {
-  const app = express();
-  app.use(express.json({ limit: '6mb' }));
+export const app = express();
+app.use(express.json({ limit: '6mb' }));
 
+export async function startServer() {
   // Health
   app.get('/api/health', async (_req, res) => {
     res.json({ ok: true, service: 'GestDepot API', timestamp: new Date().toISOString() });
@@ -727,9 +727,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`GestDepot server listening on http://0.0.0.0:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`GestDepot server listening on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-startServer();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  startServer();
+}
