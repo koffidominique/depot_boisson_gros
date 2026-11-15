@@ -22,6 +22,8 @@ export default defineConfig(() => {
           display: 'standalone',
           start_url: '/',
           scope: '/',
+          lang: 'fr',
+          dir: 'ltr',
           icons: [
             {
               src: '/pwa-192x192.png',
@@ -42,6 +44,16 @@ export default defineConfig(() => {
               purpose: 'maskable',
             },
           ],
+          // Web Share Target : GestDepot peut recevoir du contenu partagé
+          share_target: {
+            action: '/share',
+            method: 'GET',
+            params: {
+              title: 'title',
+              text: 'text',
+              url: 'url',
+            },
+          },
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
@@ -68,6 +80,66 @@ export default defineConfig(() => {
                 expiration: {
                   maxEntries: 10,
                   maxAgeSeconds: 60 * 60 * 24 * 365,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Snapshot API — lecture hors-ligne + mise à jour arrière-plan
+            {
+              urlPattern: /^\/api\/snapshot/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'api-snapshot-cache',
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 60 * 60 * 24,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Profils de démo — rarement changent → CacheFirst
+            {
+              urlPattern: /^\/api\/demo-profiles/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'api-profiles-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 7,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Dépôts (formulaire inscription) → CacheFirst
+            {
+              urlPattern: /^\/api\/auth\/warehouses/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'api-warehouses-cache',
+                expiration: {
+                  maxEntries: 10,
+                  maxAgeSeconds: 60 * 60 * 24 * 7,
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            // Health check — NetworkFirst avec cache court
+            {
+              urlPattern: /^\/api\/health/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'api-health-cache',
+                expiration: {
+                  maxEntries: 5,
+                  maxAgeSeconds: 60 * 5,
                 },
                 cacheableResponse: {
                   statuses: [0, 200],

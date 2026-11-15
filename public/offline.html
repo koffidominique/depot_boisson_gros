@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hors-ligne — GestDepot</title>
+    <meta name="description" content="GestDepot est hors-ligne. Vos données sont conservées en cache et seront synchronisées à la reconnexion." />
+    <meta name="theme-color" content="#0F172A" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #0F172A;
+        color: #F8FAFC;
+        font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        background: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 16px;
+        padding: 40px 32px;
+        max-width: 420px;
+        width: 90%;
+        text-align: center;
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+      }
+      .icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        background: #0F172A;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 16px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      }
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 20px;
+        font-weight: 700;
+        color: #F8FAFC;
+      }
+      p {
+        margin: 0 0 24px 0;
+        font-size: 14px;
+        color: #94A3B8;
+        line-height: 1.5;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 20px;
+        padding: 8px 14px;
+        border-radius: 20px;
+        background: #064E3B;
+        color: #D1FAE5;
+        font-size: 12px;
+        font-weight: 600;
+        border: 1px solid #047857;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #10B981;
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      .retry {
+        width: 100%;
+        background: #10B981;
+        border: none;
+        border-radius: 10px;
+        padding: 12px 20px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #FFFFFF;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .retry:hover { background: #059669; }
+      .retry:active { transform: scale(0.98); }
+      .hint {
+        margin-top: 16px;
+        font-size: 11px;
+        color: #64748B;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="icon" aria-hidden="true">📴</div>
+      <h1>Hors-ligne</h1>
+      <p>
+        Vous n'êtes actuellement pas connecté à Internet. GestDepot conserve vos données en cache et
+        synchronisera vos opérations automatiquement à la reconnexion.
+      </p>
+      <div class="status">
+        <span class="dot" aria-hidden="true"></span>
+        Mode hors-ligne actif
+      </div>
+      <button class="retry" onclick="window.location.reload()">Réessayer</button>
+      <p class="hint">GestDepot — ERP Dépôt de Boissons CI</p>
+    </div>
+  </body>
+</html>

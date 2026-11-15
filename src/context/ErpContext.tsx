@@ -17,6 +17,14 @@ import type {
 } from '../types/erp';
 import { PERMISSIONS } from '../types/erp';
 import { canUser, getActiveDelegationsForUser } from '../lib/format';
+import {
+  fetchVapidPublicKey,
+  getPushState,
+  subscribePush as clientSubscribePush,
+  unsubscribePush as clientUnsubscribePush,
+  requestPermission,
+  type PushSubscriptionState,
+} from '../lib/push';
 
 export type NavModuleId =
   | 'dashboard'
@@ -179,6 +187,17 @@ interface ErpContextValue {
   isOnline: boolean;
   simulatedOffline: boolean;
   setSimulatedOffline: (val: boolean) => void;
+  offlineReady: boolean;
+  pushState: PushSubscriptionState;
+  pushSubscription: PushSubscriptionState['subscription'];
+  subscribePush: () => Promise<{ ok: boolean; error?: string }>;
+  unsubscribePush: () => Promise<{ ok: boolean; error?: string }>;
+  sendPush: (input: {
+    userId?: string;
+    title: string;
+    body: string;
+    url?: string;
+  }) => Promise<{ ok: boolean; results?: unknown; error?: string }>;
   offlineQueue: OfflineQueueItem[];
   syncNow: () => Promise<void>;
   refreshSnapshot: (userIdOverride?: string) => Promise<void>;
@@ -219,6 +238,14 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
   const [simulatedOffline, setSimulatedOffline] = useState<boolean>(false);
+  const [offlineReady, setOfflineReady] = useState<boolean>(false);
+  const [pushState, setPushState] = useState<PushSubscriptionState>({
+    isSupported: false,
+    isSubscribed: false,
+    permission: 'default',
+    subscription: null,
+  });
+  const [pushSubscription, setPushSubscription] = useState<PushSubscriptionState['subscription']>(null);
   const [offlineQueue, setOfflineQueue] = useState<OfflineQueueItem[]>([]);
   const [toasts, setToasts] = useState<ToastNotice[]>([]);
   const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem('gestdepot_dark') === 'true');
@@ -260,13 +287,40 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const onOnline = () => setBrowserOnline(true);
     const onOffline = () => setBrowserOnline(false);
+    const onOfflineReady = () => setOfflineReady(true);
+    const onPWAUpdate = () => {
+      // Nouvelle version du SW disponible — notifier via le contexte
+      notify('warning', 'Une nouvelle version de GestDepot est disponible. Actualisez pour l\'installer.');
+    };
+
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
+    window.addEventListener('gestdepot:pwa-offline-ready', onOfflineReady);
+    window.addEventListener('gestdepot:pwa-update', onPWAUpdate);
+
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
+      window.removeEventListener('gestdepot:pwa-offline-ready', onOfflineReady);
+      window.removeEventListener('gestdepot:pwa-update', onPWAUpdate);
     };
-  }, []);
+  }, [notify]);
+
+  // Écouter le message de synchronisation terminée depuis le Service Worker (background sync)
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'GESTDEPOT_SYNCED' && event.data?.snapshot) {
+        setSnapshot(event.data.snapshot);
+        saveCachedSnapshot(event.data.snapshot).catch(() => {});
+        notify('success', 'Opérations hors-ligne synchronisées en arrière-plan.');
+      }
+    };
+
+    navigator.serviceWorker?.addEventListener('message', handleMessage as EventListener);
+    return () => {
+      navigator.serviceWorker?.removeEventListener('message', handleMessage as EventListener);
+    };
+  }, [notify]);
 
   const fetchProfiles = useCallback(async () => {
     try {
@@ -290,6 +344,71 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Ignore offline
     }
   }, []);
+
+  // Notifications Push : s'abonner
+  const subscribePush = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!isOnline) {
+      return { ok: false, error: 'Connexion requise pour s\'abonner aux notifications.' };
+    }
+    const perm = await requestPermission();
+    if (perm !== 'granted') {
+      return { ok: false, error: 'Permission de notification refusée.' };
+    }
+    const result = await clientSubscribePush();
+    if (result.ok && result.subscription) {
+      setPushSubscription(result.subscription);
+      setPushState((prev) => ({
+        ...prev,
+        isSubscribed: true,
+        subscription: result.subscription ?? null,
+      }));
+      return { ok: true };
+    }
+    return { ok: false, error: result.error };
+  }, [isOnline]);
+
+  // Notifications Push : se désabonner
+  const unsubscribePush = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    if (!pushSubscription) {
+      return { ok: false, error: 'Aucun abonnement push actif.' };
+    }
+    const result = await clientUnsubscribePush(pushSubscription.id);
+    if (result.ok) {
+      setPushSubscription(null);
+      setPushState((prev) => ({ ...prev, isSubscribed: false, subscription: null }));
+      return { ok: true };
+    }
+    return { ok: false, error: result.error };
+  }, [pushSubscription]);
+
+  // Notifications Push : envoyer une notification (Propriétaire uniquement)
+  const sendPush = useCallback(
+    async (input: {
+      userId?: string;
+      title: string;
+      body: string;
+      url?: string;
+    }): Promise<{ ok: boolean; results?: unknown; error?: string }> => {
+      if (!isOnline) {
+        return { ok: false, error: 'Connexion requise pour envoyer une notification.' };
+      }
+      try {
+        const res = await fetch('/api/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, error: data.error || 'Échec de l\'envoi push.' };
+        }
+        return { ok: true, results: data.results };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Erreur réseau.' };
+      }
+    },
+    [isOnline]
+  );
 
   const refreshSnapshot = useCallback(
     async (userIdOverride?: string) => {
@@ -338,7 +457,24 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fetchProfiles();
     refreshSnapshot();
     getOfflineQueue().then(setOfflineQueue);
-  }, [fetchProfiles, refreshSnapshot]);
+
+    // Initialiser l'état des notifications push
+    (async () => {
+      const state = await getPushState();
+      setPushState(state);
+      if (state.subscription) {
+        setPushSubscription({
+          id: state.subscription.id,
+          userId: currentUserId || '',
+          endpoint: state.subscription.endpoint,
+          p256dh: state.subscription.p256dh,
+          auth: state.subscription.auth,
+          createdAt: state.subscription.createdAt,
+          active: true,
+        });
+      }
+    })();
+  }, [fetchProfiles, refreshSnapshot, currentUserId]);
 
   const currentUser =
     snapshot?.users.find((u) => u.id === currentUserId && !u.deletedAt && u.active) ||
@@ -712,6 +848,12 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isOnline,
         simulatedOffline,
         setSimulatedOffline,
+        offlineReady,
+        pushState,
+        pushSubscription,
+        subscribePush,
+        unsubscribePush,
+        sendPush,
         offlineQueue,
         syncNow,
         refreshSnapshot,

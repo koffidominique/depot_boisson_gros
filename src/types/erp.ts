@@ -10,6 +10,9 @@ export const PERMISSIONS = {
   CREDIT_LIMIT_UPDATE: 'credit_limit.update',
   CREDIT_WRITE_OFF: 'credit.write_off',
   AUDIT_VIEW_ALL: 'audit.view_all',
+  SNAPSHOT_EXPORT: 'snapshot.export',
+  APPROVAL_LIST: 'approval.list',
+  APPROVAL_DECIDE: 'approval.decide',
   ACCOUNTING_EXPORT: 'accounting.export',
   DELEGATION_MANAGE: 'delegation.manage',
   SALE_CANCEL_CLOSED: 'sale.cancel_closed',
@@ -27,6 +30,8 @@ export const PERMISSIONS = {
   // Opérations quotidiennes (Gérant sur son dépôt)
   PURCHASE_RECEIVE: 'purchase.receive',
   STOCK_INVENTORY: 'stock.inventory',
+  INVENTORY_OPEN: 'inventory.open',
+  INVENTORY_CLOSE: 'inventory.close',
   STOCK_ADJUST: 'stock.adjust',
   SALE_CREATE: 'sale.create',
   SALE_VALIDATE: 'sale.validate',
@@ -651,6 +656,16 @@ export interface OfflineQueueItem {
   errorMessage?: string;
 }
 
+export interface PushSubscriptionRecord {
+  id: string;
+  userId: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  createdAt: string;
+  active: boolean;
+}
+
 export interface DepotDatabaseSnapshot {
   company: CompanySettings;
   users: UserAccount[];
@@ -675,6 +690,7 @@ export interface DepotDatabaseSnapshot {
   reconciliations: ReconciliationPV[];
   approvals: ApprovalRequest[];
   auditLogs: AuditLog[];
+  pushSubscriptions: PushSubscriptionRecord[];
   counters: Record<string, number>;
   processedClientUuids?: string[];
 }
