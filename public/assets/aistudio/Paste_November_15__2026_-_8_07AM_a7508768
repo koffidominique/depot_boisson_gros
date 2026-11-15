@@ -1,0 +1,664 @@
+# 🏗️ GestDepot — Architecture cible & Modèle de données
+
+Voici le livrable complet demandé par le §12 du prompt master. Il est structuré en 4 parties : **architecture**, **modèle de données**, **matrice RBAC**, **roadmap 3 mois**. À valider avant de démarrer le Sprint 1.
+
+---
+
+## 1. Architecture cible
+
+### 1.1 Vue d'ensemble (C4 — niveau conteneur)
+
+```mermaid
+flowchart TB
+    subgraph Clients["👥 Clients (terrain & bureau)"]
+        WEB["🖥️ App Web<br/>(React + TS)<br/>Gérant · Admin · Comptable"]
+        MOB["📱 App Mobile<br/>(Flutter)<br/>Caissier · Livreur · Magasinier"]
+        PWA["📲 PWA Lite<br/>(navigateur)<br/>Dépannage"]
+    end
+
+    subgraph Edge["🌐 Edge"]
+        NGX["Nginx<br/>(reverse proxy, TLS)"]
+    end
+
+    subgraph API["⚙️ API Core (NestJS)"]
+        AUTH["Auth · RBAC · Audit"]
+        CAT["Catalogue · Stock"]
+        SALES["Ventes · Caisse"]
+        CONS["Consignes"]
+        CRED["Crédit · Recouvrement"]
+        LOGI["Livraisons · Tournées"]
+        REP["Reporting · KPI"]
+    end
+
+    subgraph Data["💾 Données"]
+        PG[("PostgreSQL 16<br/>+ JSONB + full-text")]
+        REDIS[("Redis<br/>cache · sessions · queues")]
+        MINIO[("MinIO / S3<br/>PDF · photos · signatures")]
+    end
+
+    subgraph Async["⚡ Asynchrone"]
+        BULL["BullMQ<br/>jobs (SMS, sync, PDF, clôtures)"]
+        WORK["Worker Node"]
+    end
+
+    subgraph Externes["🔌 Intégrations"]
+        MOMO["Mobile Money<br/>OM · MTN · Wave · Moov"]
+        SMS["Passerelle SMS/WhatsApp"]
+        FISC["Export comptable<br/>(Sage, CSV)"]
+    end
+
+    WEB & MOB & PWA --> NGX --> AUTH
+    NGX --> API
+    API --> PG & REDIS & MINIO
+    API --> BULL --> WORK
+    WORK --> MOMO & SMS & FISC
+    MOB -.->|"Sync offline<br/>SQLite ↔ API"| AUTH
+
+    style Clients fill:#e0f2fe
+    style API fill:#fef3c7
+    style Data fill:#dcfce7
+    style Async fill:#fce7f3
+    style Externes fill:#ede9fe
+```
+
+### 1.2 Stack technique (justifiée)
+
+| Couche | Choix | Justification métier |
+|--------|-------|---------------------|
+| **Backend** | NestJS (Node 20, TypeScript) | Structure modulaire naturelle pour 16 modules ; décorateurs = RBAC propre ; écosystème mature pour offline-sync et files. |
+| **Base** | PostgreSQL 16 | JSONB pour paramétrage flexible (produits par client), full-text pour recherche, transactions ACID **indispensables** sur stock et consignes. |
+| **Cache/Queue** | Redis + BullMQ | Alertes SMS asynchrones, génération PDF, jobs de réconciliation nocturne, cache des KPI dashboard. |
+| **Web** | React 18 + Vite + TypeScript + TailwindCSS + shadcn/ui | Rapide, dense, accessible, look "ERP pro". Parfait pour gérant/comptable. |
+| **Mobile** | Flutter (Android prioritaire) | **Offline-first natif** via `sqflite` + `drift`, compilation performante sur terminaux bas de gamme, impression Bluetooth thermique supportée. |
+| **Auth** | JWT access (15 min) + refresh (7j) + refresh token rotation | Sécurité + déconnexion contrôlée terrain. |
+| **PDF** | Puppeteer (HTML→PDF) | Templates factures / BL / Z rapport / PV réconciliation facilement maintenables en HTML. |
+| **Stockage fichiers** | MinIO (S3-compatible) | Signatures, photos de casse, PV signés — auto-hébergé (souveraineté données locales). |
+| **CI/CD** | GitHub Actions + Docker | Repo `GestDepot` déjà sur GitHub : pipelines natifs. |
+| **Hébergement** | VPS Abidjan (ou Europe si latence acceptable) | Proximité réseau, réduction latence 3G locale. |
+
+### 1.3 Stratégie Offline-First (le point le plus délicat)
+
+```mermaid
+sequenceDiagram
+    participant M as 📱 Mobile (SQLite)
+    participant S as ☁️ Serveur (PG)
+    participant Q as BullMQ
+    Note over M: Hors réseau
+    M->>M: Caissier vend 1 casier Bock (espèces)
+    M->>M: Enregistre localement (statut: pending_sync)
+    M->>M: Imprime ticket (file locale imprimante BT)
+    Note over M: Retour réseau
+    M->>S: POST /sync/push (batch transactions)
+    S->>S: Valide (idempotence via UUID client)
+    S->>Q: Déclenche alertes (stock bas, créance)
+    S-->>M: Ack + conflits éventuels
+    M->>M: Marque synced / résout conflits
+```
+
+**Règles de sync :**
+- **Idempotence** : chaque transaction a un UUID généré côté client → pas de doublon en cas de retry.
+- **Conflits** : priorité serveur sur stock (si 2 caissiers vendent le même dernier casier, le 2ᵉ reçoit un rejet avec message clair + proposition de substitution).
+- **Sensibilité** : les **consignes** et les **ajustements d'inventaire** ne se font **jamais** en offline (nécessitent validation gérant côté serveur).
+- **File de sync** : priorité aux ventes/encaissements (cash), puis BL, puis lectures. Retry exponentiel.
+
+### 1.4 Sécurité & audit
+
+- **Auth** : JWT + refresh rotation, MFA TOTP optionnel pour admin.
+- **Mots de passe** : Argon2id.
+- **Transport** : TLS 1.3 partout, HSTS.
+- **Secrets** : variables d'env + Vault si dispo, jamais dans le repo.
+- **Audit** : table `audit_logs` **append-only** (trigger PG interdisant UPDATE/DELETE), signée par hash chaîné (chaque ligne référence le hash de la précédente → toute altération détectable).
+- **Soft-delete** : colonne `deleted_at` sur toute entité métier, jamais de `DELETE` physique.
+
+---
+
+## 2. Modèle de données
+
+### 2.1 Vue d'ensemble (ERD simplifié)
+
+```mermaid
+erDiagram
+    COMPANIES ||--o{ WAREHOUSES : has
+    COMPANIES ||--o{ USERS : employs
+    ROLES ||--o{ USERS : assigns
+    ROLES ||--o{ ROLE_PERMISSIONS : has
+    PERMISSIONS ||--o{ ROLE_PERMISSIONS : in
+
+    SUPPLIERS ||--o{ PURCHASE_ORDERS : receives
+    PURCHASE_ORDERS ||--o{ PO_LINES : contains
+    PURCHASE_ORDERS ||--o{ GOODS_RECEIPTS : fulfilled_by
+    GOODS_RECEIPTS ||--o{ GR_LINES : contains
+
+    PRODUCTS ||--o{ PACKAGINGS : has
+    PACKAGINGS ||--o{ PRODUCT_STOCKS : tracked_in
+    WAREHOUSES ||--o{ PRODUCT_STOCKS : holds
+
+    CUSTOMERS ||--o{ SALES : buys
+    SALES ||--o{ SALE_LINES : contains
+    SALES ||--o{ DELIVERIES : shipped_by
+    DELIVERIES ||--o{ DELIVERY_LINES : contains
+
+    CUSTOMERS ||--o{ CONSIGNMENTS : holds
+    PACKAGINGS ||--o{ CONSIGNMENTS : concerns
+    CONSIGNMENTS ||--o{ CONSIGNMENT_MOVEMENTS : logs
+
+    CUSTOMERS ||--o{ CREDITS : owes
+    CREDITS ||--o{ CREDIT_PAYMENTS : paid_by
+
+    CASH_SESSIONS ||--o{ CASH_MOVEMENTS : logs
+    USERS ||--o{ CASH_SESSIONS : opens
+    USERS ||--o{ AUDIT_LOGS : generates
+
+    PRODUCTS {
+        uuid id PK
+        string code UK
+        string name
+        uuid category_id FK
+        string unit_base
+        bool is_active
+    }
+    PACKAGINGS {
+        uuid id PK
+        uuid product_id FK
+        string label
+        int units_per_pack
+        numeric purchase_price
+        numeric sale_price
+        numeric deposit_price
+        bool is_returnable
+        int barcode_ean
+    }
+    PRODUCT_STOCKS {
+        uuid id PK
+        uuid warehouse_id FK
+        uuid packaging_id FK
+        int qty_on_hand
+        int qty_reserved
+        int qty_consigned_out
+        int qty_min_alert
+    }
+    CONSIGNMENTS {
+        uuid id PK
+        uuid customer_id FK
+        uuid packaging_id FK
+        int qty_held
+        numeric deposit_value
+        timestamp last_movement_at
+    }
+    CONSIGNMENT_MOVEMENTS {
+        uuid id PK
+        uuid consignment_id FK
+        string type
+        int qty
+        numeric deposit_amount
+        uuid sale_id FK
+        uuid user_id FK
+        string document_ref
+    }
+```
+
+### 2.2 Tables critiques (à soigner en priorité)
+
+#### 2.2.1 `products` + `packagings` (le cœur du catalogue)
+
+La **séparation produit / conditionnement** est essentielle : un même produit (Bock) existe en plusieurs conditionnements avec des règles différentes.
+
+```sql
+CREATE TABLE products (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id      UUID NOT NULL REFERENCES companies(id),
+    code            VARCHAR(50) NOT NULL,
+    name            VARCHAR(150) NOT NULL,
+    category        VARCHAR(50) NOT NULL, -- beer, soda, water, energy, other
+    brand           VARCHAR(80),          -- Bock, Castel, World Cola...
+    supplier_id     UUID REFERENCES suppliers(id),
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    metadata        JSONB DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by      UUID NOT NULL REFERENCES users(id),
+    updated_at      TIMESTAMPTZ,
+    updated_by      UUID REFERENCES users(id),
+    deleted_at      TIMESTAMPTZ,
+    UNIQUE (company_id, code) WHERE deleted_at IS NULL
+);
+
+CREATE TABLE packagings (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id            UUID NOT NULL REFERENCES products(id),
+    label                 VARCHAR(100) NOT NULL,  -- "Casier 24 × 33cl", "Pack 6 × 1L"
+    type                  VARCHAR(30) NOT NULL,   -- bottle_glass_crate, bottle_glass_pack, pet_pack, can_carton
+    units_per_pack        INTEGER NOT NULL,       -- 12, 24, 6...
+    volume_cl             INTEGER,                -- 33, 50, 100, 150
+    purchase_price        NUMERIC(12,2) NOT NULL, -- prix HT d'achat
+    sale_price            NUMERIC(12,2) NOT NULL, -- prix de vente standard (détail)
+    sale_price_wholesale  NUMERIC(12,2),          -- tarif semi-gros
+    sale_price_retail     NUMERIC(12,2),          -- tarif détail (maquis)
+    deposit_price         NUMERIC(12,2) DEFAULT 0,-- caution par pack (casier/bouteille)
+    deposit_per_bottle    NUMERIC(12,2) DEFAULT 0,-- caution par bouteille (si applicable)
+    is_returnable         BOOLEAN NOT NULL DEFAULT false,
+    barcode_ean           VARCHAR(20),
+    is_active             BOOLEAN NOT NULL DEFAULT true,
+    metadata              JSONB DEFAULT '{}',
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at            TIMESTAMPTZ,
+    UNIQUE (product_id, label) WHERE deleted_at IS NULL
+);
+```
+
+**Exemples concrets** (à charger en seed) :
+
+| Produit | Packaging | units | purchase | sale (gros) | sale (détail) | deposit_pack | returnable |
+|---------|-----------|-------|----------|-------------|---------------|--------------|------------|
+| Bock | Casier 24 × 33cl | 24 | 6 500 | 7 200 | 7 500 | 1 500 | ✅ |
+| Bock | Casier 12 × 50cl | 12 | 7 800 | 8 500 | 8 800 | 1 500 | ✅ |
+| Castel | Casier 24 × 33cl | 24 | 7 000 | 7 800 | 8 100 | 1 500 | ✅ |
+| World Cola | Pack 6 × 1L PET | 6 | 2 400 | 2 700 | 2 900 | 0 | ❌ |
+| Ferox | Carton 24 × 33cl | 24 | 8 000 | 8 800 | 9 200 | 0 | ❌ |
+| Awa | Pack 12 × 50cl PET | 12 | 1 800 | 2 100 | 2 300 | 0 | ❌ |
+
+> **Note** : prix indicatifs à ajuster selon les tarifs réels Solibra/Brassivoire du moment.
+
+#### 2.2.2 `product_stocks` (stock par conditionnement, pas par produit)
+
+Point crucial : on ne stocke **pas** "10 000 bouteilles de Bock" mais "400 casiers 33cl + 50 casiers 50cl". Le casier est l'unité atomique de mouvement.
+
+```sql
+CREATE TABLE product_stocks (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    warehouse_id        UUID NOT NULL REFERENCES warehouses(id),
+    packaging_id        UUID NOT NULL REFERENCES packagings(id),
+    qty_on_hand         INTEGER NOT NULL DEFAULT 0 CHECK (qty_on_hand >= 0),
+    qty_reserved        INTEGER NOT NULL DEFAULT 0 CHECK (qty_reserved >= 0),
+    qty_consigned_out   INTEGER NOT NULL DEFAULT 0, -- casiers sortis chez clients non revenus
+    qty_min_alert       INTEGER NOT NULL DEFAULT 0,
+    last_movement_at    TIMESTAMPTZ,
+    updated_at          TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (warehouse_id, packaging_id)
+);
+```
+
+**Invariants garantis par triggers PG** :
+- `qty_on_hand >= 0` toujours (sauf ajustement autorisé gérant avec journal).
+- Toute vente décrémente `qty_on_hand` **et** incrémente `qty_consigned_out` (si packaging returnable).
+- Tout retour de casier décrémente `qty_consigned_out`.
+
+#### 2.2.3 `consignments` + `consignment_movements` (module signature)
+
+C'est **LE** module qui distingue GestDepot. Deux tables : l'**état courant** (consignments = solde par client) et le **journal des mouvements** (immuable).
+
+```sql
+-- État courant : combien chaque client détient, et pour quelle valeur
+CREATE TABLE consignments (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id       UUID NOT NULL REFERENCES customers(id),
+    packaging_id      UUID NOT NULL REFERENCES packagings(id),
+    qty_held          INTEGER NOT NULL DEFAULT 0 CHECK (qty_held >= 0),
+    deposit_value     NUMERIC(12,2) NOT NULL DEFAULT 0, -- = qty_held × deposit_price
+    last_movement_at  TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (customer_id, packaging_id)
+);
+
+-- Journal immuable : toute variation de consigne, avec sa cause
+CREATE TABLE consignment_movements (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    consignment_id    UUID NOT NULL REFERENCES consignments(id),
+    type              VARCHAR(30) NOT NULL, -- SALE_OUT | RETURN_IN | ADJUSTMENT | LOSS | TRANSFER
+    qty               INTEGER NOT NULL,     -- positif = sortie, négatif = retour
+    deposit_amount    NUMERIC(12,2) NOT NULL,
+    sale_id           UUID REFERENCES sales(id),
+    delivery_id       UUID REFERENCES deliveries(id),
+    reason            TEXT,                 -- pour ADJUSTMENT/LOSS
+    validated_by      UUID NOT NULL REFERENCES users(id),
+    document_ref      VARCHAR(50),          -- numéro BL, ticket, PV
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Journal immuable (append-only)
+CREATE RULE consignment_movements_no_update AS ON UPDATE TO consignment_movements DO INSTEAD NOTHING;
+CREATE RULE consignment_movements_no_delete AS ON DELETE TO consignment_movements DO INSTEAD NOTHING;
+```
+
+**Règles métier codées dans les services :**
+1. **Vente d'un casier consigné** : `SALE_OUT` crée un mouvement +qty, incrémente `qty_held` du client, incrémente `qty_consigned_out` du stock, enregistre le montant de caution dû.
+2. **Retour de casier vide** : `RETURN_IN` crée un mouvement -qty, décrémente `qty_held`, décrémente `qty_consigned_out`. Si le montant de caution avait été facturé au client, génération d'un **avoir** ou d'un **remboursement**.
+3. **Casse / perte chez le client** : `LOSS` avec motif signé, la caution est **retenue** (pas de remboursement), le gérant doit valider.
+4. **Ajustement d'inventaire consigne** (fin d'année, litige) : `ADJUSTMENT` avec double validation (gérant + admin).
+5. **Rapprochement avec la brasserie** : mensuel, comparaison entre `qty_consigned_out` total système et le solde déclaré par le fournisseur → génération d'un PV.
+
+**Requêtes clés à prévoir** (vues matérialisées pour perf) :
+
+```sql
+-- Vue : valeur totale des cautions dues par chaque client (à afficher dashboard)
+CREATE MATERIALIZED VIEW v_customer_deposit_balance AS
+SELECT c.id AS customer_id, c.name,
+       SUM(cs.deposit_value) AS total_deposit_due,
+       COUNT(DISTINCT cs.packaging_id) AS distinct_packagings,
+       MAX(cs.last_movement_at) AS last_movement
+FROM customers c
+JOIN consignments cs ON cs.customer_id = c.id
+WHERE cs.qty_held > 0
+GROUP BY c.id, c.name;
+
+-- Vue : clients avec casiers non retournés depuis > 30 jours (alerte)
+CREATE VIEW v_consignments_overdue AS
+SELECT cs.*, c.name, c.phone
+FROM consignments cs
+JOIN customers c ON c.id = cs.customer_id
+WHERE cs.qty_held > 0
+  AND cs.last_movement_at < now() - INTERVAL '30 days';
+```
+
+#### 2.2.4 `customers` (avec champs métier)
+
+```sql
+CREATE TABLE customers (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id          UUID NOT NULL REFERENCES companies(id),
+    code                VARCHAR(30) NOT NULL,
+    name                VARCHAR(150) NOT NULL,
+    type                VARCHAR(30) NOT NULL, -- maquis, bar, boutique, semi_grossiste, restaurant
+    phone               VARCHAR(20),
+    whatsapp            VARCHAR(20),
+    address             TEXT,
+    quartier            VARCHAR(80),
+    commune             VARCHAR(80),
+    gps_lat             NUMERIC(10,7),
+    gps_lng             NUMERIC(10,7),
+    credit_limit        NUMERIC(12,2) DEFAULT 0,
+    credit_balance      NUMERIC(12,2) DEFAULT 0, -- vue dénormalisée pour perf
+    payment_terms_days  INTEGER DEFAULT 0,
+    is_blocked          BOOLEAN DEFAULT false,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by          UUID NOT NULL REFERENCES users(id),
+    deleted_at          TIMESTAMPTZ,
+    UNIQUE (company_id, code) WHERE deleted_at IS NULL
+);
+```
+
+#### 2.2.5 `sales` + `sale_lines` (avec gestion caution)
+
+```sql
+CREATE TABLE sales (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id        UUID NOT NULL REFERENCES companies(id),
+    warehouse_id      UUID NOT NULL REFERENCES warehouses(id),
+    customer_id       UUID NOT NULL REFERENCES customers(id),
+    number            VARCHAR(30) NOT NULL UNIQUE, -- SD-2025-000001
+    sale_date         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status            VARCHAR(20) NOT NULL, -- draft, validated, invoiced, cancelled
+    subtotal          NUMERIC(12,2) NOT NULL DEFAULT 0,
+    deposit_total     NUMERIC(12,2) NOT NULL DEFAULT 0, -- cautions facturées ce jour
+    tax_total         NUMERIC(12,2) NOT NULL DEFAULT 0,
+    total             NUMERIC(12,2) NOT NULL DEFAULT 0,
+    payment_method    VARCHAR(30), -- cash, momo_orange, momo_mtn, wave, momo_moov, credit, mixed
+    payment_status    VARCHAR(20), -- paid, partial, unpaid
+    cash_session_id   UUID REFERENCES cash_sessions(id),
+    validated_by      UUID REFERENCES users(id),
+    validated_at      TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by        UUID NOT NULL REFERENCES users(id),
+    deleted_at        TIMESTAMPTZ
+);
+
+CREATE TABLE sale_lines (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    sale_id           UUID NOT NULL REFERENCES sales(id) ON DELETE RESTRICT,
+    packaging_id      UUID NOT NULL REFERENCES packagings(id),
+    qty               INTEGER NOT NULL CHECK (qty > 0),
+    unit_price        NUMERIC(12,2) NOT NULL,
+    discount_pct      NUMERIC(5,2) DEFAULT 0,
+    deposit_unit      NUMERIC(12,2) DEFAULT 0,
+    line_total        NUMERIC(12,2) NOT NULL,
+    discount_reason   TEXT, -- obligatoire si discount > 0
+    discount_by       UUID REFERENCES users(id)
+);
+```
+
+#### 2.2.6 `audit_logs` (append-only signé)
+
+```sql
+CREATE TABLE audit_logs (
+    id                BIGSERIAL PRIMARY KEY,
+    company_id        UUID NOT NULL,
+    user_id           UUID,
+    action            VARCHAR(50) NOT NULL,   -- CREATE, UPDATE, VALIDATE, CANCEL, DELETE_SOFT...
+    entity            VARCHAR(50) NOT NULL,   -- sale, consignment, stock...
+    entity_id         UUID NOT NULL,
+    before            JSONB,
+    after             JSONB,
+    ip                INET,
+    user_agent        TEXT,
+    prev_hash         VARCHAR(64),            -- hash de la ligne précédente
+    hash              VARCHAR(64) NOT NULL,   -- SHA256(prev_hash + payload)
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_audit_entity ON audit_logs(entity, entity_id);
+CREATE INDEX idx_audit_user_date ON audit_logs(user_id, created_at DESC);
+
+-- Rendre immuable
+CREATE RULE audit_no_update AS ON UPDATE TO audit_logs DO INSTEAD NOTHING;
+CREATE RULE audit_no_delete AS ON DELETE TO audit_logs DO INSTEAD NOTHING;
+```
+
+#### 2.2.7 `cash_sessions` + `cash_movements`
+
+```sql
+CREATE TABLE cash_sessions (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id        UUID NOT NULL REFERENCES companies(id),
+    warehouse_id      UUID NOT NULL REFERENCES warehouses(id),
+    cashier_id        UUID NOT NULL REFERENCES users(id),
+    opened_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    closed_at         TIMESTAMPTZ,
+    opening_amount    NUMERIC(12,2) NOT NULL,
+    closing_theoretical NUMERIC(12,2),
+    closing_physical  NUMERIC(12,2),
+    variance          NUMERIC(12,2), -- physical - theoretical
+    variance_reason   TEXT,
+    validated_by      UUID REFERENCES users(id),
+    status            VARCHAR(20) NOT NULL -- open, closed, validated, disputed
+);
+
+CREATE TABLE cash_movements (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cash_session_id   UUID NOT NULL REFERENCES cash_sessions(id),
+    type              VARCHAR(30) NOT NULL, -- sale_cash, momo_in, sale_credit, deposit_refund, expense, transfer_bank, transfer_momo
+    amount            NUMERIC(12,2) NOT NULL,
+    direction         VARCHAR(10) NOT NULL, -- in / out
+    reference_id      UUID,
+    reference_type    VARCHAR(30),
+    notes             TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by        UUID NOT NULL REFERENCES users(id)
+);
+```
+
+### 2.3 Volumétrie estimée & index critiques
+
+| Table | Lignes/mois (dépôt actif) | Index clés |
+|-------|---------------------------|-----------|
+| sales | ~1 500 | `(company_id, sale_date)`, `(customer_id, sale_date)`, `number` |
+| sale_lines | ~6 000 | `(sale_id)`, `(packaging_id)` |
+| consignment_movements | ~2 500 | `(consignment_id, created_at)`, `(type)` |
+| cash_movements | ~4 000 | `(cash_session_id)`, `(created_at)` |
+| audit_logs | ~15 000 | `(entity, entity_id)`, `(user_id, created_at DESC)` |
+
+Après 24 mois : ~600k lignes cumulées — sans problème pour PG bien indexé. Partition par mois sur `audit_logs` et `consignment_movements` à prévoir **à l'an 2**.
+
+### 2.4 Conventions transverses
+
+- **PK** : UUID v4 (`gen_random_uuid()`).
+- **Soft-delete** : colonne `deleted_at TIMESTAMPTZ` + filtre par défaut dans les repos.
+- **Audit columns** : `created_at`, `created_by`, `updated_at`, `updated_by` **sur toutes** les tables métier.
+- **Devise** : `NUMERIC(12,2)` (XOF = entiers, mais 2 décimales pour extensibilité future si UEMOA change).
+- **Dates** : `TIMESTAMPTZ` en UTC, affichage local Abidjan (`Africa/Abidjan`, pas de DST — simplifie).
+- **Numérotation documents** : séquence par `(company_id, type, year)` — ex: `SD-2025-000001` (SD=Sale), `BL-2025-000042`, `Z-2025-000187` (rapport Z).
+
+---
+
+## 3. Matrice RBAC
+
+### 3.1 Rôles (6)
+
+| Rôle | Profil | Contexte |
+|------|--------|----------|
+| **admin** | Propriétaire / DG | Partout, tout |
+| **gerant** | Gérant de dépôt | Bureau, supervision |
+| **magasinier** | Réception, stock, inventaire | Dépôt physique |
+| **caissier** | Encaissement, vente comptoir | Caisse |
+| **livreur** | Livraison terrain, encaissement | Mobile |
+| **comptable** | Lecture + exports + réconciliation | Bureau |
+
+### 3.2 Permissions (48 au total, regroupées par ressource)
+
+Convention : `resource.action` — ex: `sale.create`, `sale.validate`, `consignment.adjust`.
+
+```
+product.read        product.create      product.update      product.delete
+packaging.read      packaging.create    packaging.update    packaging.delete
+stock.read          stock.adjust        stock.inventory     stock.reconcile
+purchase.read       purchase.create     purchase.receive
+sale.read           sale.create         sale.validate       sale.cancel     sale.discount_over_5pct
+delivery.read       delivery.create     delivery.complete   delivery.return
+consignment.read    consignment.sale_out consignment.return_in consignment.adjust consignment.loss
+credit.read         credit.grant        credit.block        credit.write_off
+cash.open           cash.close          cash.move           cash.reconcile
+customer.read       customer.create     customer.update     customer.delete
+user.read           user.create         user.update         user.deactivate
+report.view         report.export       audit.view          settings.update
+```
+
+### 3.3 Matrice (résumé)
+
+| Permission critique | admin | gérant | magasinier | caissier | livreur | comptable |
+|---------------------|:-----:|:------:|:----------:|:--------:|:-------:|:---------:|
+| `product.read` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `product.create/update` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `stock.adjust` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `stock.inventory` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `purchase.receive` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `sale.create` | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| `sale.validate` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `sale.cancel` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `sale.discount_over_5pct` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `consignment.sale_out` | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ |
+| `consignment.return_in` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `consignment.adjust` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `consignment.loss` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `credit.grant` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `credit.block` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `cash.open/close` | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| `cash.reconcile` | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| `delivery.complete` | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
+| `report.view` | ✅ | ✅ | ✅(stock) | ✅(caisse) | ❌ | ✅ |
+| `audit.view` | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| `settings.update` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+### 3.4 Règles de séparation des tâches (contraintes dures)
+
+Ces règles sont **vérifiées côté serveur**, pas seulement en UI :
+
+1. **Un utilisateur ne peut pas valider une vente qu'il a lui-même créée** (`sale.validate` interdit si `sale.created_by = current_user`).
+2. **Un utilisateur ne peut pas clôturer une caisse qu'il a lui-même ouverte** (clôture validée par gérant/admin).
+3. **`consignment.adjust`** et **`consignment.loss`** nécessitent **deux validateurs distincts** (gérant + admin).
+4. **Ajustement de stock** > 5% du stock : double validation.
+5. **Remise > 5%** : validation gérant + motif obligatoire.
+6. **Remboursement de caution > 50 000 FCFA** : validation gérant.
+
+### 3.5 Workflow d'approbation (exemple : annulation de vente)
+
+```mermaid
+sequenceDiagram
+    actor C as Caissier
+    actor G as Gérant
+    participant API as API
+    participant AUD as Audit
+    C->>API: Demande annulation vente SD-2025-000123
+    API->>API: Crée demande de validation (status=pending)
+    API-->>G: Notification in-app
+    G->>API: Approuve avec motif "erreur de saisie"
+    API->>API: Statut vente = cancelled<br/>Recrédite stock + consignes
+    API->>AUD: Log {entity: sale, action: CANCEL, before, after, approver: G}
+    API-->>C: Notification validée
+```
+
+---
+
+## 4. Roadmap 3 mois (12 sprints de 1 semaine ou 6 sprints de 2 semaines)
+
+### Vue d'ensemble
+
+```mermaid
+gantt
+    title Roadmap GestDepot — 12 semaines
+    dateFormat  YYYY-MM-DD
+    axisFormat  S%V
+    section Socle
+    Sprint 1 - Fondations & Référentiel   :s1, 2025-01-06, 14d
+    Sprint 2 - Auth & RBAC & Audit        :s2, after s1, 14d
+    section Stock & Achats
+    Sprint 3 - Produits & Stocks          :s3, after s2, 14d
+    Sprint 4 - Achats & Réceptions        :s4, after s3, 14d
+    section Ventes
+    Sprint 5 - Ventes & Caisse            :s5, after s4, 14d
+    Sprint 6 - Consignes (module core)    :s6, after s5, 14d
+    section Terrain & Argent
+    Sprint 7 - Livraisons & Mobile        :s7, after s6, 14d
+    Sprint 8 - Crédit & Recouvrement      :s8, after s7, 14d
+    section Consolidation
+    Sprint 9 - Reporting & Dashboard      :s9, after s8, 14d
+    Sprint 10 - Trésorerie & Réconciliations :s10, after s9, 14d
+    Sprint 11 - Mobile offline complet    :s11, after s10, 14d
+    Sprint 12 - Hardening, perfs, doc     :s12, after s11, 14d
+```
+
+### Détail sprint par sprint
+
+| # | Sprint | Livrables clés | Critère de démo |
+|---|--------|---------------|-----------------|
+| **1** | Fondations & Référentiel | Repo structuré, Docker Compose, PG + migrations, CRUD `products` + `packagings` + `customers` + `suppliers` + `warehouses`, seed des produits Solibra | Créer un produit Bock avec 3 conditionnements et un client maquis |
+| **2** | Auth · RBAC · Audit | Login JWT, rôles, permissions, `audit_logs` signés, soft-delete, guards NestJS | Un caissier ne peut PAS accéder à `settings` ; toute création produit est auditée |
+| **3** | Stocks & Inventaires | `product_stocks` avec triggers, mouvements de stock, inventaire tournant, ajustements avec double validation | Saisir un inventaire, générer écart, valider ajustement par 2 rôles |
+| **4** | Achats & Réceptions | Bons de commande, réception avec écarts, entrée stock auto, cautions versées aux brasseries | Réceptionner BL Solibra, enregistrer écart 2 casiers manquants, stock à jour |
+| **5** | Ventes & Caisse | Vente comptoir, tickets PDF, caisse ouverture/clôture, rapport Z, modes paiement (cash + MoMo) | Vendre 3 casiers + 2 packs, encaisser mixte, clôturer caisse avec écart |
+| **6** | **Consignes** ⭐ | Module complet : `consignments`, `consignment_movements`, sortie/retour/casse, solde par client, alertes dépassement | Vendre casier → consigne due → retour casier → avoir généré → alerte 30j |
+| **7** | Livraisons & Mobile v1 | Tournées, BL mobile Flutter, signature client, retours de tournée, sync basique online | Livreur crée BL, client signe, retour bureau → stock et caisse cohérents |
+| **8** | Crédits & Recouvrement | Encours, plafonds, blocages, balance âgée, relances SMS/WhatsApp, échéanciers | Client à 95% plafond bloqué, règlement débloque, relance J+7 envoyée |
+| **9** | Reporting & Dashboard | Dashboard KPI temps réel, 15+ rapports (CA, marge, rotation, top, écart caisse, cautions), exports PDF/Excel | Gérant ouvre dashboard : voit CA jour, top produits, 3 alertes, solde cautions |
+| **10** | Trésorerie & Réconciliations | Transferts caisse↔banque↔MoMo, réconciliation quotidienne, PV réconciliation brasserie mensuel | Générer PV réconciliation avec la brasserie signé électroniquement |
+| **11** | Mobile offline complet | Sync bidirectionnelle robuste, gestion conflits, file de retry, PWA fallback | Vendre 20 tickets hors réseau, reconnecter, tout sync sans doublon |
+| **12** | Hardening | Tests charge (50 users), audits perfs, doc utilisateur par rôle, manuel de gouvernance, CI/CD prod | Démo end-to-end avec audit de sécurité |
+
+### Jalons de validation
+
+- **Fin S2** : "Socle technique validé" — la base ne bougera plus structurellement.
+- **Fin S6** : "MVP métier démontrable" — le dépôt peut tourner **en mode pilote** avec ventes + consignes + caisse (pas encore mobile).
+- **Fin S9** : "Version commercialisable" — la majorité des dépôts peuvent l'adopter avec formation.
+- **Fin S12** : "Version production" — robustesse, offline complet, doc complète.
+
+### Risques identifiés et parades
+
+| Risque | Impact | Parade |
+|--------|--------|--------|
+| Module Consignes mal modélisé | 🔴 Critique — perte de cautions réelles | Sprint 6 dédié **entier**, revue métier avec un vrai gérant, tests d'invariants PG |
+| Sync offline qui crée des doublons | 🔴 Critique — caisse fausse | UUID client + idempotence serveur + tests de conflit systématiques |
+| Faible adoption terrain | 🟠 Élevé | UX testée avec livreurs/caissiers réels dès Sprint 7, formation vidéo |
+| Connectivité 3G instable en tournée | 🟠 Élevé | Sync batch compressé, retry exponentiel, cache local agressif |
+| Fraude interne (caissier) | 🔴 Critique | Audit signé + séparation des tâches + rapports variance quotidienne |
+| Réglementation fiscale changeante | 🟡 Moyen | Paramétrage TVA / mentions factures dans `settings`, pas hard-codé |
+
+---
+
+## ✅ Prochaines étapes recommandées
+
+1. **Valider cette architecture** (surtout §2.2.3 Consignes et §3.4 séparation des tâches) — c'est ici que se joue la réussite du projet.
+2. **Amender le prompt master** avec toute précision métier issue de cette validation (ex: montants réels de cautions Solibra, seuils de remise, formats de BL).
+3. **Lancer le Sprint 1** : je peux te générer immédiatement :
+   - Le **squelette du repo** (dossiers, Docker Compose, `README`).
+   - Les **migrations SQL** des tables du Sprint 1 (`companies`, `warehouses`, `products`, `packagings`, `customers`, `suppliers`, `users`, `roles`, `permissions`).
+   - Le **seed** des produits Solibra/Brassivoire.
+   - Les **endpoints CRUD NestJS** de base.
+
+Veux-tu que je **démarre le Sprint 1** maintenant (migrations + seed + CRUD référentiel), ou que je creuse d'abord un point précis (ex: le **workflow détaillé du module Consignes** avec tous ses cas limites, ou la **stratégie offline** avec algorithme de résolution de conflits) ?

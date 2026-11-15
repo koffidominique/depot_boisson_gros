@@ -1,0 +1,6 @@
+{
+  "name": "GestDepot — ERP Dépôt de Boissons CI",
+  "description": "Application ERP et caisse terrain offline-first pour la gestion de dépôts de boissons en Côte d'Ivoire : stocks, conditionnements, consignes casiers, livraisons, crédits, trésorerie et gouvernance auditable.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

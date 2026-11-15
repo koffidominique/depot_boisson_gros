@@ -1,0 +1,213 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+@layer components {
+  /* Elevated surface shadows & luminous border depth for cards, charts, tables & tab bars */
+  .erp-card {
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.05),
+      0 8px 24px -8px rgba(15, 23, 42, 0.08),
+      0 0 0 1px rgba(15, 23, 42, 0.03);
+    transition:
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 220ms ease;
+  }
+
+  .erp-card:hover {
+    box-shadow:
+      0 4px 10px -2px rgba(15, 23, 42, 0.08),
+      0 16px 32px -10px rgba(15, 23, 42, 0.12),
+      0 0 0 1px rgba(16, 185, 129, 0.22);
+  }
+
+  .dark .erp-card {
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.35),
+      0 12px 28px -8px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .dark .erp-card:hover {
+    box-shadow:
+      0 6px 16px rgba(0, 0, 0, 0.45),
+      0 18px 36px -10px rgba(16, 185, 129, 0.16),
+      inset 0 1px 0 rgba(16, 185, 129, 0.15);
+  }
+
+  /* Apply crisp elevation to standard module card/table/chart shells globally */
+  main .rounded-xl.border {
+    box-shadow:
+      0 1px 3px rgba(15, 23, 42, 0.05),
+      0 6px 20px -6px rgba(15, 23, 42, 0.07);
+    transition:
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 220ms ease;
+  }
+
+  main .rounded-xl.border:hover {
+    box-shadow:
+      0 4px 10px -2px rgba(15, 23, 42, 0.07),
+      0 14px 28px -8px rgba(15, 23, 42, 0.11);
+  }
+
+  .dark main .rounded-xl.border {
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.32),
+      0 10px 24px -8px rgba(0, 0, 0, 0.48),
+      inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .dark main .rounded-xl.border:hover {
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0.45),
+      0 16px 32px -8px rgba(16, 185, 129, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Segmented Tab Bars shadow depth */
+  main .rounded-lg.bg-slate-200\/70,
+  main .rounded-lg.bg-slate-200\/60 {
+    box-shadow:
+      inset 0 1px 2px rgba(15, 23, 42, 0.08),
+      0 1px 2px rgba(255, 255, 255, 0.6);
+  }
+
+  .dark main .rounded-lg.bg-slate-200\/70,
+  .dark main .rounded-lg.bg-slate-200\/60 {
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Tables inside cards: subtle row hover & crisp border shadow */
+  main table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  main table tbody tr {
+    transition:
+      background-color 160ms ease,
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms ease;
+  }
+
+  main table tbody tr:hover {
+    background-color: rgba(241, 245, 249, 0.72);
+  }
+
+  .dark main table tbody tr:hover {
+    background-color: rgba(30, 41, 59, 0.55);
+  }
+
+  /* Fluid button hover scale across main action buttons */
+  main button:not(:disabled) {
+    transition:
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 180ms ease,
+      background-color 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease;
+  }
+
+  main button:not(:disabled):hover {
+    transform: translateY(-1px) scale(1.012);
+  }
+
+  main button:not(:disabled):active {
+    transform: translateY(0) scale(0.985);
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@page ticket80mm {
+  size: 80mm auto;
+  margin: 2mm;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+
+  main .rounded-xl.border {
+    box-shadow: none !important;
+    border-color: #cbd5e1 !important;
+  }
+
+  .ticket-80mm-overlay {
+    position: static !important;
+    inset: auto !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+
+  .ticket-80mm-card {
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    width: 76mm !important;
+    max-width: 76mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .ticket-80mm-sheet {
+    page: ticket80mm;
+    width: 76mm !important;
+    max-width: 76mm !important;
+    margin: 0 auto !important;
+    padding: 2mm 1mm !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+  }
+}

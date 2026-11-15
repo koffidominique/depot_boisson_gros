@@ -1,0 +1,749 @@
+# 👥 GestDepot — Les 3 profils utilisateurs : responsabilités & implémentation
+
+Dans un dépôt ivoirien réel, **3 profils suffisent** pour couvrir 95 % des besoins (les rôles caissier/magasinier/comptable que j'avais proposés sont souvent **portés par le gérant** dans les petits dépôts, ou ajoutés plus tard en option). Voici la logique complète, avec les spécificités du terrain.
+
+---
+
+## 1. Pourquoi 3 profils et pas plus — le réalisme terrain
+
+| Situation réelle | Conséquence sur les rôles |
+|------------------|---------------------------|
+| Le propriétaire a souvent 1 à 3 dépôts, et n'est **pas sur place** | Il a besoin d'une **vue globale multi-dépôts** et d'un rôle **validateur à distance** |
+| Le gérant **fait tout sur place** : réception, vente, caisse, inventaire | Son rôle doit couvrir **toutes les opérations quotidiennes**, mais **pas** les décisions stratégiques |
+| Le livreur est **seul sur sa tournée**, manipule **cash + casiers** | C'est le profil le plus à risque → rôle **très restreint** et **traçable** |
+| Le propriétaire peut **remplacer le gérant** en cas d'absence | Le système doit gérer la **délégation temporaire** sans créer de 4ᵉ rôle |
+
+> **Principe directeur** : *« Un profil = un périmètre de responsabilité clair. Les actions sensibles sont toujours validées par un profil différent de celui qui les initie. »*
+
+---
+
+## 2. Les 3 profils — responsabilités détaillées
+
+### 2.1 🏛️ PROPRIÉTAIRE (proprietaire)
+
+**Position dans le workflow** : au-dessus de l'opérationnel, il **voit tout**, **décide**, **valide les actes graves**.
+
+#### Responsabilités exclusives (personne d'autre ne peut)
+- **Créer / fermer un dépôt**, ajouter / retirer un utilisateur
+- **Modifier le paramétrage financier** : plafonds de crédit, seuils de remise, taux de caution, prix de vente
+- **Valider les opérations de gouvernance lourde** :
+  - Annulation d'une vente déjà clôturée en caisse
+  - Ajustement d'inventaire > 5 % du stock d'un produit
+  - Abandon de créance / passage en perte
+  - Remboursement de caution > seuil (ex: 50 000 FCFA)
+  - Casse exceptionnelle > seuil
+- **Consulter le journal d'audit complet**
+- **Exporter les données comptables** (bilan mensuel, exports Sage)
+
+#### Responsabilités partagées avec le gérant
+- Consulter tous les rapports, tous les dépôts
+- Créer / modifier produits et clients
+
+#### Ce que le propriétaire NE devrait PAS faire (par discipline)
+- **Encaisser directement** (il ne doit pas ouvrir de caisse — c'est le rôle du gérant ou du livreur)
+- **Créer une vente lui-même** → il valide, il ne saisit pas
+
+> **Pourquoi ?** Un propriétaire qui encaisse ou vend brouille la traçabilité : impossible de savoir si la caisse est juste. En le maintenant au-dessus, il **contrôle** au lieu d'**exécuter**.
+
+#### Contexte multi-dépôts
+Il est le **seul** à avoir un accès transversal. Sa session porte un `company_id` mais pas de `warehouse_id` filtré.
+
+---
+
+### 2.2 🧑‍💼 GÉRANT / MANAGER (gerant)
+
+**Position dans le workflow** : c'est le **chef d'orchestre du dépôt**. Il exécute tout ce qui est quotidien et valide ce qui est sensible localement.
+
+#### Responsabilités opérationnelles (exclusives sur son dépôt)
+- **Réception des livraisons brasseries** : saisie BL, contrôle quantités, enregistrement des écarts
+- **Gestion du stock** : inventaires tournants, ajustements (dans les limites autorisées), casse ≤ seuil
+- **Ventes** : création, validation, remises ≤ 5 %, annulation de vente **non encore clôturée**
+- **Consignes** : sortie, retour, perte (avec motif), rapprochement avec la brasserie
+- **Caisse** : ouverture, clôture, comptage physique, justification d'écart
+- **Crédits clients** : accorder un crédit **dans la limite du plafond fixé par le propriétaire**, bloquer / débloquer un client
+- **Livraisons** : planifier les tournées, affecter les livreurs, valider les retours de tournée
+- **Relances** : envoyer SMS/WhatsApp aux clients en retard
+
+#### Responsabilités partagées avec le propriétaire
+- Consulter tous les rapports du dépôt
+- Créer / modifier produits et clients
+
+#### Ce que le gérant NE PEUT PAS faire
+- Modifier les **plafonds de crédit** (fixés par le propriétaire)
+- Modifier les **prix de vente** (fixés par le propriétaire)
+- **Valider sa propre caisse** (doit être validée par le propriétaire — anti-fraude)
+- **Créer / supprimer un utilisateur**
+- **Voir les autres dépôts** (isolation multi-dépôts stricte)
+- **Abandonner une créance**
+
+#### Cas particulier : gérant = caissier + magasinier
+En pratique, il cumule **tous les rôles opérationnels** du dépôt. C'est **pourquoi** la règle « un utilisateur ne valide pas ce qu'il a créé » s'applique à lui **avec exception documentée** :
+- Il peut **valider ses propres ventes** (sinon il ne peut pas travailler)
+- Mais il **ne peut pas valider sa propre clôture de caisse** → c'est le propriétaire (à distance) qui valide
+- Chaque auto-validation est **journalisée** et **signalée** dans le rapport hebdo du propriétaire
+
+---
+
+### 2.3 🛵 LIVREUR (livreur)
+
+**Position dans le workflow** : **le seul profil 100 % terrain**, sur mobile, en offline, avec de l'argent liquide dans les poches. C'est le profil **le plus sensible** en gouvernance.
+
+#### Responsabilités (strictement encadrées)
+- **Consulter sa tournée du jour** (clients affectés, quantités, ordre de passage)
+- **Émettre un BL** pour chaque livraison (imprimé ou signature client à l'écran)
+- **Encaisser** les paiements (cash ou Mobile Money) et **enregistrer le mode de paiement** par client
+- **Récupérer les casiers vides** et les **compter** à la remise au gérant
+- **Enregistrer un retour** (produit non livré, refus client, client fermé)
+- **Signaler une casse** survenue pendant la tournée (avec photo)
+- **Clôturer sa tournée** : remise d'espèces au gérant + remise de casiers + rapport de tournée
+
+#### Ce que le livreur NE PEUT JAMAIS faire
+- **Créer / modifier un client** (il ne fait que livrer à des clients existants)
+- **Modifier un prix** ou **accorder une remise**
+- **Vendre à crédit** (sauf si le client est **déjà validé crédit** par le gérant → dans ce cas seulement, il peut enregistrer une vente à crédit dans la limite du plafond restant)
+- **Voir les autres tournées** ou les autres livreurs
+- **Accéder à la caisse centrale** (il a sa **propre caisse de tournée**)
+- **Consulter les marges, prix d'achat, statistiques financières**
+- **Saisir un inventaire ou un ajustement**
+
+#### Règles de gouvernance mobile (spécifiques livreur)
+1. **Caisse de tournée isolée** : chaque tournée ouvre une « mini-caisse » avec un fonds initial (généralement 0) et se clôture à la remise au gérant.
+2. **Photo obligatoire** pour toute casse ou retour non-standard.
+3. **Signature client obligatoire** sur le BL (écran tactile) — sinon BL « non conforme », alerte gérant.
+4. **Écart de caisse livreur** : à la clôture de tournée, s'il manque de l'argent, alerte **immédiate** au gérant + propriétaire.
+5. **Casiers** : le livreur ne peut **pas** sortir plus de casiers que ce que le BL autorise (contrôle automatique à l'émission du BL).
+6. **Géolocalisation optionnelle** : point de livraison horodaté + GPS pour prouver le passage.
+
+---
+
+## 3. Matrice de responsabilités consolidée
+
+| Action | Propriétaire | Gérant | Livreur |
+|--------|:------------:|:------:|:-------:|
+| **Configurer le dépôt** | ✅ | ❌ | ❌ |
+| **Créer un utilisateur** | ✅ | ❌ | ❌ |
+| **Modifier prix de vente** | ✅ | ❌ | ❌ |
+| **Modifier plafond crédit** | ✅ | ❌ | ❌ |
+| **Créer / modifier produit** | ✅ | ✅ | ❌ |
+| **Créer / modifier client** | ✅ | ✅ | ❌ |
+| **Réceptionner BL brasserie** | ❌ | ✅ | ❌ |
+| **Saisir inventaire** | ✅ (audit) | ✅ | ❌ |
+| **Ajuster stock > 5 %** | ✅ (valide) | ❌ | ❌ |
+| **Créer une vente comptoir** | ❌ | ✅ | ❌ |
+| **Valider une vente** | ✅ (si > seuil) | ✅ | ❌ |
+| **Appliquer remise ≤ 5 %** | ✅ | ✅ | ❌ |
+| **Appliquer remise > 5 %** | ✅ (valide) | ❌ | ❌ |
+| **Encaisser cash/MoMo au dépôt** | ❌ | ✅ | ✅ (tournée) |
+| **Ouvrir / clôturer caisse dépôt** | ❌ | ✅ (clôture validée par toi) | ❌ |
+| **Ouvrir / clôturer caisse tournée** | ❌ | ✅ (supervise) | ✅ |
+| **Sortir des casiers consignés** | ❌ | ✅ | ✅ (via BL) |
+| **Enregistrer retour casiers** | ❌ | ✅ | ✅ (physique) |
+| **Enregistrer perte / casse consigne** | ✅ (valide) | ✅ (≤ seuil) | ✅ (signale, gérant valide) |
+| **Accorder crédit** | ✅ | ✅ (≤ plafond) | ❌ |
+| **Bloquer / débloquer client** | ✅ | ✅ | ❌ |
+| **Abandonner créance** | ✅ | ❌ | ❌ |
+| **Planifier tournée** | ✅ | ✅ | ❌ |
+| **Voir sa tournée** | — | ✅ | ✅ |
+| **Émettre BL** | ❌ | ✅ | ✅ |
+| **Voir rapports financiers** | ✅ (tous) | ✅ (son dépôt) | ❌ |
+| **Voir journal d'audit** | ✅ | ✅ (ses actions + équipe) | ✅ (ses propres actions) |
+| **Exporter données comptables** | ✅ | ❌ | ❌ |
+
+Légende : ✅ = autorisé · ❌ = interdit · (valide) = agit comme approbateur d'une demande tierce
+
+---
+
+## 4. Implémentation technique
+
+### 4.1 Modèle de données (simplifié à 3 rôles)
+
+```sql
+-- Table de rôles figée à 3 valeurs métier (pas de CRUD : c'est un enum métier)
+CREATE TYPE user_role AS ENUM ('proprietaire', 'gerant', 'livreur');
+
+CREATE TABLE users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id      UUID NOT NULL REFERENCES companies(id),
+    role            user_role NOT NULL,
+    -- Périmètre : null = transverse (propriétaire), sinon 1 dépôt
+    warehouse_id    UUID REFERENCES warehouses(id),
+    full_name       VARCHAR(120) NOT NULL,
+    phone           VARCHAR(20) NOT NULL UNIQUE, -- login principal en CI
+    email           VARCHAR(150) UNIQUE,
+    password_hash   VARCHAR(255) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    must_change_pwd BOOLEAN DEFAULT false,
+    last_login_at   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by      UUID REFERENCES users(id),
+    deleted_at      TIMESTAMPTZ,
+    -- Contrainte : un gérant et un livreur DOIVENT avoir un warehouse_id
+    CHECK (
+        (role = 'proprietaire' AND warehouse_id IS NULL)
+     OR (role IN ('gerant','livreur') AND warehouse_id IS NOT NULL)
+    )
+);
+
+-- Permissions granulaires (déclarées en code, stockées en base pour flexibilité)
+CREATE TABLE permissions (
+    code        VARCHAR(60) PRIMARY KEY,  -- ex: 'sale.validate'
+    description TEXT NOT NULL
+);
+
+CREATE TABLE role_permissions (
+    role            user_role NOT NULL,
+    permission_code VARCHAR(60) NOT NULL REFERENCES permissions(code),
+    PRIMARY KEY (role, permission_code)
+);
+
+-- Délégation temporaire : le propriétaire peut déléguer des droits au gérant
+CREATE TABLE delegations (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_user_id      UUID NOT NULL REFERENCES users(id),
+    to_user_id        UUID NOT NULL REFERENCES users(id),
+    permission_code   VARCHAR(60) NOT NULL REFERENCES permissions(code),
+    warehouse_id      UUID REFERENCES warehouses(id),
+    starts_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ends_at           TIMESTAMPTZ NOT NULL,
+    reason            TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+### 4.2 Catalogue des permissions (code source de vérité)
+
+```typescript
+// src/auth/permissions.ts
+export const PERMISSIONS = {
+  // Configuration (propriétaire uniquement)
+  SETTINGS_UPDATE:        'settings.update',
+  USER_CREATE:            'user.create',
+  USER_UPDATE:            'user.update',
+  PRICE_UPDATE:           'price.update',
+  CREDIT_LIMIT_UPDATE:    'credit_limit.update',
+  CREDIT_WRITE_OFF:       'credit.write_off',
+  AUDIT_VIEW_ALL:         'audit.view_all',
+  ACCOUNTING_EXPORT:      'accounting.export',
+
+  // Référentiel (proprio + gérant)
+  PRODUCT_CREATE:         'product.create',
+  PRODUCT_UPDATE:         'product.update',
+  CUSTOMER_CREATE:        'customer.create',
+  CUSTOMER_UPDATE:        'customer.update',
+
+  // Opérations quotidiennes (gérant)
+  PURCHASE_RECEIVE:       'purchase.receive',
+  STOCK_INVENTORY:        'stock.inventory',
+  STOCK_ADJUST:           'stock.adjust',        // ≤5% auto, >5% requiert validation proprio
+  SALE_CREATE:            'sale.create',
+  SALE_VALIDATE:          'sale.validate',
+  SALE_DISCOUNT_5:        'sale.discount_5',
+  SALE_DISCOUNT_OVER_5:   'sale.discount_over_5', // valide, ne crée pas
+  SALE_CANCEL:            'sale.cancel',
+  CASH_OPEN:              'cash.open',
+  CASH_CLOSE:             'cash.close',           // clôture physique
+  CASH_CLOSE_VALIDATE:    'cash.close_validate',  // validation finale
+  CONSIGNMENT_SALE_OUT:   'consignment.sale_out',
+  CONSIGNMENT_RETURN_IN:  'consignment.return_in',
+  CONSIGNMENT_LOSS:       'consignment.loss',     // ≤ seuil
+  CONSIGNMENT_LOSS_OVER:  'consignment.loss_over',// valide seulement
+  CREDIT_GRANT:           'credit.grant',
+  CREDIT_BLOCK:           'credit.block',
+  DELIVERY_PLAN:          'delivery.plan',
+  DELIVERY_COMPLETE:      'delivery.complete',
+  REPORT_VIEW_WAREHOUSE:  'report.view_warehouse',
+  AUDIT_VIEW_WAREHOUSE:   'audit.view_warehouse',
+
+  // Terrain (livreur)
+  ROUTE_VIEW_OWN:         'route.view_own',
+  BL_EMIT:                'bl.emit',
+  PAYMENT_COLLECT:        'payment.collect',
+  CASH_TOURNEE_CLOSE:     'cash.tournee_close',
+  BREAKAGE_REPORT:        'breakage.report',
+  AUDIT_VIEW_OWN:         'audit.view_own',
+} as const;
+```
+
+### 4.3 Attribution des permissions par rôle (seed)
+
+```typescript
+// src/auth/role-permissions.seed.ts
+import { PERMISSIONS as P } from './permissions';
+
+export const ROLE_PERMISSIONS = {
+  proprietaire: Object.values(P), // TOUT
+
+  gerant: [
+    P.PRODUCT_CREATE, P.PRODUCT_UPDATE,
+    P.CUSTOMER_CREATE, P.CUSTOMER_UPDATE,
+    P.PURCHASE_RECEIVE,
+    P.STOCK_INVENTORY, P.STOCK_ADJUST,     // >5% requiert validation proprio
+    P.SALE_CREATE, P.SALE_VALIDATE, P.SALE_DISCOUNT_5,
+    P.SALE_CANCEL,                          // seulement si caisse non clôturée
+    P.CASH_OPEN, P.CASH_CLOSE,              // close = soumise à validation
+    P.CONSIGNMENT_SALE_OUT, P.CONSIGNMENT_RETURN_IN, P.CONSIGNMENT_LOSS,
+    P.CREDIT_GRANT, P.CREDIT_BLOCK,
+    P.DELIVERY_PLAN, P.DELIVERY_COMPLETE,
+    P.REPORT_VIEW_WAREHOUSE, P.AUDIT_VIEW_WAREHOUSE,
+    P.PRICE_UPDATE_VIEW,                    // voit mais ne modifie pas (via check service)
+  ],
+
+  livreur: [
+    P.ROUTE_VIEW_OWN,
+    P.BL_EMIT,
+    P.PAYMENT_COLLECT,
+    P.CASH_TOURNEE_CLOSE,
+    P.BREAKAGE_REPORT,
+    P.AUDIT_VIEW_OWN,
+  ],
+} as const;
+```
+
+### 4.4 NestJS : Guard + Décorateur + Service
+
+#### 4.4.1 Le décorateur `@RequirePermissions`
+
+```typescript
+// src/auth/require-permissions.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+
+export const PERMISSIONS_KEY = 'permissions';
+export const RequirePermissions = (...permissions: string[]) =>
+  SetMetadata(PERMISSIONS_KEY, permissions);
+```
+
+#### 4.4.2 Le guard principal
+
+```typescript
+// src/auth/permissions.guard.ts
+import {
+  CanActivate, ExecutionContext, Injectable, ForbiddenException,
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { PERMISSIONS_KEY } from './require-permissions.decorator';
+import { RolePermissionsService } from './role-permissions.service';
+import { DelegationService } from './delegation.service';
+
+@Injectable()
+export class PermissionsGuard implements CanActivate {
+  constructor(
+    private reflector: Reflector,
+    private rolePermissions: RolePermissionsService,
+    private delegations: DelegationService,
+  ) {}
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const required = this.reflector.getAllAndOverride<string[]>(
+      PERMISSIONS_KEY, [ctx.getHandler(), ctx.getClass()],
+    );
+    if (!required || required.length === 0) return true;
+
+    const req = ctx.switchToHttp().getRequest();
+    const user = req.user; // injecté par JwtAuthGuard en amont
+    if (!user) throw new ForbiddenException('Non authentifié');
+
+    // 1. Permissions natives du rôle
+    const base = await this.rolePermissions.getForRole(user.role);
+
+    // 2. Permissions déléguées temporairement
+    const delegated = await this.delegations.getActiveForUser(user.id);
+
+    const granted = new Set([...base, ...delegated]);
+    const missing = required.filter((p) => !granted.has(p));
+    if (missing.length > 0) {
+      throw new ForbiddenException(
+        `Permissions manquantes : ${missing.join(', ')}`,
+      );
+    }
+
+    // 3. Enrichir la requête pour les guards suivants (scope)
+    req.userPermissions = granted;
+    return true;
+  }
+}
+```
+
+#### 4.4.3 Le guard de périmètre (isolation multi-dépôts)
+
+```typescript
+// src/auth/warehouse-scope.guard.ts
+import {
+  CanActivate, ExecutionContext, ForbiddenException, Injectable,
+} from '@nestjs/common';
+
+@Injectable()
+export class WarehouseScopeGuard implements CanActivate {
+  canActivate(ctx: ExecutionContext): boolean {
+    const req = ctx.switchToHttp().getRequest();
+    const user = req.user;
+
+    // Propriétaire : accès à tous les dépôts, pas de filtrage
+    if (user.role === 'proprietaire') return true;
+
+    // Gérant / Livreur : un seul dépôt imposé
+    const requestedWarehouse =
+      req.params.warehouseId ??
+      req.query.warehouseId ??
+      req.body.warehouseId;
+
+    if (requestedWarehouse && requestedWarehouse !== user.warehouseId) {
+      throw new ForbiddenException(
+        'Accès refusé à un autre dépôt que le vôtre.',
+      );
+    }
+
+    // On force le filtre sur toutes les requêtes de données
+    req.scopeWarehouseId = user.warehouseId;
+    return true;
+  }
+}
+```
+
+#### 4.4.4 Le guard livreur (isolation tournée)
+
+```typescript
+// src/delivery/own-route.guard.ts
+@Injectable()
+export class OwnRouteGuard implements CanActivate {
+  constructor(private deliveryService: DeliveryService) {}
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const req = ctx.switchToHttp().getRequest();
+    const user = req.user;
+    if (user.role !== 'livreur') return true;
+
+    const routeId = req.params.routeId;
+    const route = await this.deliveryService.findById(routeId);
+    if (!route || route.livreurId !== user.id) {
+      throw new ForbiddenException('Cette tournée ne vous appartient pas.');
+    }
+    return true;
+  }
+}
+```
+
+#### 4.4.5 Application sur un controller
+
+```typescript
+// src/sales/sales.controller.ts
+@Controller('sales')
+@UseGuards(JwtAuthGuard, PermissionsGuard, WarehouseScopeGuard)
+export class SalesController {
+  @Post()
+  @RequirePermissions(P.SALE_CREATE)
+  create(@Body() dto: CreateSaleDto, @CurrentUser() user: User) {
+    return this.salesService.create(dto, user);
+  }
+
+  @Post(':id/validate')
+  @RequirePermissions(P.SALE_VALIDATE)
+  validate(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.salesService.validate(id, user);
+  }
+
+  @Post(':id/discount')
+  @RequirePermissions(P.SALE_DISCOUNT_5) // gérant peut jusqu'à 5%
+  applyDiscount(
+    @Param('id') id: string,
+    @Body() dto: { percent: number; reason: string },
+    @CurrentUser() user: User,
+  ) {
+    // check fin dans le service : si percent > 5, valide via workflow
+    return this.salesService.applyDiscount(id, dto, user);
+  }
+}
+```
+
+#### 4.4.6 Les règles de gouvernance dans le service (pas juste en guard)
+
+Le guard contrôle **« a-t-il le droit de faire l'action ? »**. Le service contrôle **« cette action précise est-elle permise à cet instant ? »**.
+
+```typescript
+// src/sales/sales.service.ts
+@Injectable()
+export class SalesService {
+  async validate(saleId: string, user: User) {
+    const sale = await this.repo.findById(saleId);
+
+    // Règle 1 : ne pas valider sa propre vente > seuil (gérant)
+    // (toléré en dessous du seuil car gérant solo sur le terrain)
+    const total = sale.total;
+    const SEUIL_AUTO_VALIDATION = 200_000; // FCFA
+    if (
+      sale.createdBy === user.id &&
+      total > SEUIL_AUTO_VALIDATION &&
+      user.role !== 'proprietaire'
+    ) {
+      throw new ForbiddenException(
+        `Vente > ${SEUIL_AUTO_VALIDATION} FCFA : validation par le propriétaire requise.`,
+      );
+    }
+
+    // Règle 2 : une vente dans une caisse déjà clôturée ne peut être annulée que par le propriétaire
+    if (sale.cashSessionId && sale.status === 'closed') {
+      this.assertPermission(user, 'sale.cancel_closed');
+    }
+
+    // Règle 3 : décrémenter stock + consignes + audit
+    await this.applyStockAndConsignments(sale, user);
+    await this.audit.log({
+      action: 'VALIDATE',
+      entity: 'sale',
+      entityId: sale.id,
+      userId: user.id,
+      after: { status: 'validated' },
+    });
+    return this.repo.updateStatus(saleId, 'validated');
+  }
+
+  async applyDiscount(saleId: string, dto: DiscountDto, user: User) {
+    const sale = await this.repo.findById(saleId);
+
+    if (dto.percent > 5) {
+      // Au-delà de 5% : on ne l'applique pas, on CRÉE UNE DEMANDE DE VALIDATION
+      await this.approvals.create({
+        type: 'SALE_DISCOUNT_OVER_5',
+        entityId: saleId,
+        requestedBy: user.id,
+        payload: { percent: dto.percent, reason: dto.reason },
+        targetRole: 'proprietaire',
+      });
+      return { status: 'pending_approval' };
+    }
+    return this.repo.applyDiscount(saleId, dto.percent, dto.reason, user.id);
+  }
+
+  private assertPermission(user: User, code: string) {
+    if (!user.permissions.includes(code)) {
+      throw new ForbiddenException(`Permission requise : ${code}`);
+    }
+  }
+}
+```
+
+### 4.5 Le workflow d'approbation (propriétaire à distance)
+
+Pour les actions que le gérant **initie mais ne peut pas valider lui-même**, on utilise une table `approvals` :
+
+```sql
+CREATE TABLE approvals (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id      UUID NOT NULL REFERENCES companies(id),
+    type            VARCHAR(50) NOT NULL,   -- SALE_DISCOUNT_OVER_5, STOCK_ADJUST_OVER_5, CREDIT_WRITE_OFF, CONSIGNMENT_LOSS_OVER, CASH_CLOSE_VALIDATE
+    entity          VARCHAR(50) NOT NULL,
+    entity_id       UUID NOT NULL,
+    payload         JSONB NOT NULL,
+    requested_by    UUID NOT NULL REFERENCES users(id),
+    requested_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    target_role     user_role NOT NULL,     -- qui peut valider (proprietaire)
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, approved, rejected, expired
+    decided_by      UUID REFERENCES users(id),
+    decided_at      TIMESTAMPTZ,
+    decision_note   TEXT
+);
+```
+
+**Sur le terrain** : le gérant fait sa demande via l'app, le propriétaire reçoit une **notification in-app + SMS/WhatsApp**, valide depuis son téléphone en 2 clics. Sans cela, les dépôts « bloquent » quand le propriétaire n'est pas là — c'est la première cause d'abandon d'un ERP dans ce contexte.
+
+```typescript
+// src/approvals/approvals.service.ts
+async approve(approvalId: string, user: User, note?: string) {
+  const approval = await this.repo.findById(approvalId);
+
+  if (approval.status !== 'pending') {
+    throw new BadRequestException('Demande déjà traitée.');
+  }
+  if (user.role !== approval.targetRole) {
+    throw new ForbiddenException(
+      `Seul un ${approval.targetRole} peut valider cette demande.`,
+    );
+  }
+  if (approval.requestedBy === user.id) {
+    throw new ForbiddenException('Auto-validation interdite.');
+  }
+
+  // Exécuter l'action métier selon le type
+  await this.executeApprovedAction(approval);
+
+  await this.repo.update(approvalId, {
+    status: 'approved',
+    decidedBy: user.id,
+    decidedAt: new Date(),
+    decisionNote: note,
+  });
+
+  await this.audit.log({
+    action: 'APPROVE',
+    entity: 'approval',
+    entityId: approval.id,
+    userId: user.id,
+    after: { status: 'approved', note },
+  });
+
+  await this.notifications.notify(approval.requestedBy, {
+    title: 'Demande approuvée',
+    body: `${approval.type} validée par ${user.fullName}.`,
+  });
+}
+```
+
+### 4.6 Frontend : navigation et UX adaptées au rôle
+
+```typescript
+// app/routes.ts — déclaratif, une seule source de vérité
+export const ROUTES = [
+  { path: '/dashboard',        component: Dashboard,         requiredPermission: null },
+  { path: '/sales',            component: SalesList,         requiredPermission: 'sale.create' },
+  { path: '/sales/validate',   component: SalesValidate,     requiredPermission: 'sale.validate' },
+  { path: '/consignments',     component: Consignments,      requiredPermission: 'consignment.sale_out' },
+  { path: '/inventory',        component: Inventory,         requiredPermission: 'stock.inventory' },
+  { path: '/credits',          component: Credits,           requiredPermission: 'credit.grant' },
+  { path: '/users',            component: Users,             requiredPermission: 'user.create' },
+  { path: '/settings/prices',  component: Prices,            requiredPermission: 'price.update' },
+  { path: '/audit',            component: AuditLog,          requiredPermission: 'audit.view_warehouse' },
+  { path: '/route/today',      component: MyRoute,           requiredPermission: 'route.view_own' },
+  { path: '/route/bl',         component: BLForm,            requiredPermission: 'bl.emit' },
+];
+```
+
+**Navigation qui change selon le profil (menu ivoirien, simple) :**
+
+| Menu | Propriétaire | Gérant | Livreur |
+|------|:------------:|:------:|:-------:|
+| Tableau de bord (multi-dépôts) | ✅ | — | — |
+| Tableau de bord (mon dépôt) | ✅ | ✅ | — |
+| Ma tournée du jour | — | — | ✅ |
+| Ventes | ✅ (lecture) | ✅ | — |
+| Approvisionnement / Stock | ✅ (lecture) | ✅ | — |
+| Consignes | ✅ (lecture) | ✅ | — |
+| Crédits | ✅ (lecture) | ✅ | — |
+| Caisse | ✅ (lecture) | ✅ | ✅ (mini-caisse) |
+| Livraisons | ✅ (lecture) | ✅ (planifie) | ✅ (exécute) |
+| Rapports | ✅ | ✅ | — |
+| Utilisateurs | ✅ | — | — |
+| Prix & paramètres | ✅ | — | — |
+| Audit | ✅ | ✅ | ✅ (ses actions) |
+| Mes demandes d'approbation | ✅ | ✅ | — |
+
+**Règle UX** : masquer une option = **cacher le bouton**, mais le backend **refuse quand même** si appelé directement (jamais de sécurité uniquement front).
+
+### 4.7 Journalisation systématique (hook global)
+
+```typescript
+// src/audit/audit.interceptor.ts
+@Injectable()
+export class AuditInterceptor implements NestInterceptor {
+  constructor(private audit: AuditService) {}
+
+  intercept(ctx: ExecutionContext, next: CallHandler): Observable<any> {
+    const req = ctx.switchToHttp().getRequest();
+    const user = req.user;
+    const start = Date.now();
+    return next.handle().pipe(
+      tap((result) => {
+        if (!user) return;
+        this.audit.log({
+          action: `${req.method} ${req.route?.path ?? req.url}`,
+          entity: this.inferEntity(req),
+          entityId: result?.id ?? req.params?.id,
+          userId: user.id,
+          ip: req.ip,
+          userAgent: req.headers['user-agent'],
+          after: sanitize(req.body), // jamais de password
+          durationMs: Date.now() - start,
+        });
+      }),
+    );
+  }
+}
+```
+
+### 4.8 Tests (obligatoires pour valider la gouvernance)
+
+```typescript
+// test/rbac/gerant.spec.ts
+describe('Gérant — isolation et gouvernance', () => {
+  it('ne peut pas valider sa propre clôture de caisse', async () => {
+    const session = await createClosedCashSession({ openedBy: gerant.id });
+    await expect(
+      request.post(`/cash-sessions/${session.id}/validate`).auth(gerant.token),
+    ).rejects.toThrow(/propriétaire/i);
+  });
+
+  it("ne peut pas voir les données d'un autre dépôt", async () => {
+    const autreDepotSale = await createSale({ warehouseId: otherWarehouse.id });
+    await expect(
+      request.get(`/sales/${autreDepotSale.id}`).auth(gerant.token),
+    ).rejects.toThrow(/autre dépôt/i);
+  });
+
+  it('peut valider une vente < seuil auto-validation', async () => {
+    const sale = await createSale({ total: 50_000, createdBy: gerant.id });
+    await expect(
+      request.post(`/sales/${sale.id}/validate`).auth(gerant.token),
+    ).resolves.toMatchObject({ status: 'validated' });
+  });
+
+  it('doit passer par approval si remise > 5%', async () => {
+    const res = await request
+      .post(`/sales/${sale.id}/discount`)
+      .send({ percent: 10, reason: 'gros client' })
+      .auth(gerant.token);
+    expect(res.body.status).toBe('pending_approval');
+  });
+});
+
+describe('Livreur — périmètre ultra-restreint', () => {
+  it('ne peut pas accéder à une tournée qui n'est pas la sienne', async () => {
+    const autreTournee = await createRoute({ livreurId: otherLivreur.id });
+    await expect(
+      request.get(`/routes/${autreTournee.id}`).auth(livreur.token),
+    ).rejects.toThrow(/ne vous appartient pas/i);
+  });
+
+  it('ne peut pas modifier un prix', async () => {
+    await expect(
+      request.patch(`/sales/${sale.id}/price`).send({ price: 1 }).auth(livreur.token),
+    ).rejects.toThrow(/permission/i);
+  });
+});
+```
+
+---
+
+## 5. Cas particuliers à ne PAS rater
+
+| Cas | Solution |
+|-----|----------|
+| **Propriétaire absent pendant 2 semaines** | Délégation temporaire via table `delegations` : il donne au gérant la permission `cash.close_validate` jusqu'à une date. Tout est audité. |
+| **Un gérant gère 2 dépôts** | Le modèle prévoit **1 user = 1 dépôt**. Si un gérant couvre 2 dépôts, on crée **2 comptes** distincts (avec un même `phone` impossible → utiliser login secondaire) ou on introduit plus tard une table `user_warehouses` N-N. **Ne pas complexifier avant d'en avoir besoin.** |
+| **Le gérant est malade** | Le propriétaire prend la session du gérant (délégation inverse : `delegations` du gérant vers proprio... sauf que le proprio a déjà tout). Ou le proprio active temporairement un 2ᵉ gérant. |
+| **Le livreur tombe en panne (tricycle)** | Le gérant peut **réaffecter la tournée** à un autre livreur → la caisse de tournée suit la tournée, pas l'utilisateur. |
+| **Le gérant doit valider quelque chose qu'il a lui-même créé et qui dépasse le seuil** | Approbation par le propriétaire → notification + validation à distance. Si le propriétaire est en zone blanche → mode « validation différée » avec promesse signée. |
+| **Un livreur quitte l'entreprise avec des casiers** | La table `consignments` retient le solde **par tournée**, pas par livreur. À la clôture de tournée, le gérant doit **physiquement** compter les casiers. Tout écart est tracé. |
+| **Le propriétaire veut tester l'app comme un livreur** | Mode « impersonation » admin : log d'audit spécial, jamais utilisé pour agir en production sans trace. |
+
+---
+
+## 6. Ce qu'il faut faire **maintenant** pour implémenter
+
+1. **Créer les 3 tables** : `users` (avec enum `user_role`), `role_permissions`, `approvals`.
+2. **Seeder** les permissions (fichier `permissions.seed.ts`) et les `role_permissions` par défaut.
+3. **Implémenter** les guards `PermissionsGuard`, `WarehouseScopeGuard`, `OwnRouteGuard`, et le `JwtAuthGuard` en amont.
+4. **Créer** le module `Approvals` (CRUD + notification) — c'est **la clé** du fonctionnement propriétaire à distance.
+5. **Tester** systématiquement : 1 test par ligne de la matrice (au moins les 20 lignes critiques).
+6. **Frontend** : générer le menu dynamiquement depuis les permissions de la session — jamais coder les routes en dur par rôle.
+
+---
+
+## 🎯 Résumé en une phrase par profil
+
+| Profil | En une phrase |
+|--------|---------------|
+| **Propriétaire** | *« Je vois tout, je décide, je valide — mais je n'exécute pas. »* |
+| **Gérant** | *« J'exécute tout sur mon dépôt, je valide ce qui est quotidien, je demande validation pour ce qui est sensible. »* |
+| **Livreur** | *« Je livre, j'encaisse, je ramène les casiers — et chacun de mes gestes est tracé. »* |
+
+---
+
+Veux-tu que je génère **le module complet `auth` + `approvals` en code NestJS prêt à pousser sur le repo** (migrations SQL, seed, guards, controllers, tests) ? Ou préfères-tu qu'on détaille d'abord le **workflow du livreur en tournée** (BL, encaissement, retours, clôture de caisse de tournée) — c'est le parcours le plus complexe ?
